@@ -1,0 +1,17 @@
+{
+  "name": "intuthuko",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*", "services/*"],
+  "scripts": {
+    "dev:bot": "cd apps/bot && npm run dev",
+    "build:bot": "cd apps/bot && npm run build",
+    "db:migrate": "cd packages/db && npx prisma migrate dev",
+    "db:generate": "cd packages/db && npx prisma generate",
+    "db:seed": "cd packages/db && npx ts-node prisma/seed.ts",
+    "db:studio": "cd packages/db && npx prisma studio"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "ts-node": "^10.9.2"
+  }
+}
