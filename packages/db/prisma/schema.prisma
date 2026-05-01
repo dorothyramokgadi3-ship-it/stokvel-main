@@ -1,0 +1,621 @@
+// ============================================================
+// INTUTHUKO — Prisma Schema
+// "Every table is a tradition. Every field is a reason."
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USER — The person behind the phone number
+// ============================================================
+// In a stokvel, you ARE your phone number. No email, no username.
+// Gogo doesn't have Gmail. She has WhatsApp.
+model User {
+  id            String   @id @default(cuid())
+  phone         String   @unique                // +27... — the ONLY identity
+  displayName   String?                         // "Mama Nomsa" — what the group calls you
+  idNumber      String?  @unique                // SA ID — only for KYC when money > R25k/month
+  language      String   @default("zu")         // zu, xh, st, en — for voice notes & bot replies
+  avatarUrl     String?                         // WhatsApp profile pic, pulled on first contact
+  isVerified    Boolean  @default(false)        // Phone OTP confirmed
+  isPremium     Boolean  @default(false)        // R29/month subscriber
+  
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastSeenAt    DateTime?                       // Last bot or web interaction
+
+  // Relations
+  memberships   GroupMember[]
+  contributions Contribution[]
+  payoutsReceived Payout[]       @relation("PayoutRecipient")
+  payoutApprovals PayoutApproval[]
+  otpSessions   OtpSession[]
+  notifications Notification[]
+  auditLogs     AuditLog[]       @relation("AuditActor")
+
+  @@index([phone])
+  @@map("users")
+}
+
+// ============================================================
+// GROUP — The stokvel itself
+// ============================================================
+// A stokvel is not a "team" or "organization". It's a circle.
+// It has a name, a monthly amount, a rotation order, and rules
+// agreed upon in a meeting — not a settings page.
+model Group {
+  id              String      @id @default(cuid())
+  name            String                          // "Masakhane Savings Club"
+  code            String      @unique             // "MAS123" — short join code for WhatsApp
+  description     String?                         // "Est. 2019, Soweto. Monthly R500."
+  
+  // Money rules — set once at creation, change needs 3-of-3
+  monthlyAmount   Int                             // In cents (R500 = 50000). No decimals in ZAR
+  currency        String      @default("ZAR")     // Always ZAR. No crypto.
+  payoutDay       Int         @default(1)         // Day of month payouts happen (1-28)
+  cycleLength     Int         @default(12)        // Months per full rotation
+  currentCycle    Int         @default(1)         // Which cycle we're in
+  
+  // Group type — maps to how stokvels actually work
+  type            GroupType   @default(ROTATING)  // ROTATING | SAVINGS | BURIAL | INVESTMENT
+  
+  // Status
+  status          GroupStatus @default(ACTIVE)
+  maxMembers      Int         @default(12)        // Traditional: 12 months = 12 members
+  isPremium       Boolean     @default(false)     // Group-level premium features
+  
+  // Bank details — for EFT payments TO the group
+  bankName        String?                         // "FNB" — partner bank
+  bankAccount     String?                         // Encrypted. Only admins see
+  bankReference   String?                         // Auto-generated per group
+  
+  // Ledger
+  lastBookClose   DateTime?                       // Last nightly hash timestamp
+  lastLedgerHash  String?                         // SHA-256 of last closed book
+  
+  // Timestamps
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  members         GroupMember[]
+  contributions   Contribution[]
+  payouts         Payout[]
+  ledgerEntries   LedgerEntry[]
+  disputes        Dispute[]
+  auditLogs       AuditLog[]
+
+  @@index([code])
+  @@index([status])
+  @@map("groups")
+}
+
+enum GroupType {
+  ROTATING      // Classic: each member gets the pot once per cycle
+  SAVINGS       // Pool money, split at year-end (December clubs)
+  BURIAL        // Emergency fund for funerals — no rotation
+  INVESTMENT    // Pool + invest (needs licensed partner)
+}
+
+enum GroupStatus {
+  ACTIVE
+  PAUSED        // Temporarily frozen (dispute, December break)
+  COMPLETED     // Cycle finished, awaiting new cycle
+  DISSOLVED     // Group closed permanently
+}
+
+// ============================================================
+// GROUP MEMBER — Your seat at the table
+// ============================================================
+// In a stokvel, your ROLE matters. The treasurer is not the chair.
+// Your POSITION in rotation determines when you get paid.
+// "Position 3" means you get the pot in month 3.
+model GroupMember {
+  id              String       @id @default(cuid())
+  
+  // Who and where
+  userId          String
+  groupId         String
+  user            User         @relation(fields: [userId], references: [id])
+  group           Group        @relation(fields: [groupId], references: [id])
+  
+  // Role — maps to traditional stokvel positions
+  role            MemberRole   @default(MEMBER)
+  
+  // Rotation position — THE most important field
+  // Position 1 = gets paid first. Position 12 = gets paid last.
+  // NULL for SAVINGS/BURIAL type (no rotation)
+  rotationPosition Int?
+  
+  // Status
+  status          MemberStatus @default(ACTIVE)
+  joinedAt        DateTime     @default(now())
+  leftAt          DateTime?
+  invitedBy       String?                         // cuid of who invited them
+  
+  // Payment tracking — denormalized for speed
+  totalContributed  Int        @default(0)        // Cents. Running total.
+  totalReceived     Int        @default(0)        // Cents. What they've been paid out.
+  missedPayments    Int        @default(0)        // Count. 3 = auto-flag for review.
+  lastPaymentAt     DateTime?
+
+  // Multisig weight — for admin roles
+  // Chair=1, Treasurer=1, Secretary=1. Need sum >= 2 for payouts.
+  sigWeight       Int          @default(0)
+
+  @@unique([userId, groupId])                     // One seat per person per group
+  @@index([groupId, rotationPosition])
+  @@index([userId])
+  @@map("group_members")
+}
+
+enum MemberRole {
+  MEMBER          // Umhlanganyeli — regular member
+  SECRETARY       // Unobhala — manages book, adds members
+  TREASURER       // Umgcinimafa — manages money, initiates payouts
+  CHAIR           // Usihlalo — dispute resolution, tiebreaker
+  AUDITOR         // Umcwaningi mabhuku — read-only, verifies hashes
+}
+
+enum MemberStatus {
+  INVITED         // Sent WhatsApp invite, hasn't joined
+  ACTIVE          // Paying member in good standing
+  BEHIND          // Missed 1-2 payments — gentle reminder
+  SUSPENDED       // Missed 3+ — frozen until caught up
+  LEFT            // Voluntarily departed
+  REMOVED         // Voted out by admin consensus
+}
+
+// ============================================================
+// CONTRIBUTION — Every rand that enters the circle
+// ============================================================
+// A contribution is sacred. It's a promise kept.
+// The book records: WHO paid, WHEN, HOW MUCH, and HOW.
+// No editing. No deleting. Append-only like tradition.
+model Contribution {
+  id              String              @id @default(cuid())
+  
+  // The basics — who, where, how much
+  userId          String
+  groupId         String
+  user            User                @relation(fields: [userId], references: [id])
+  group           Group               @relation(fields: [groupId], references: [id])
+  amountCents     Int                                // Always in cents. R500 = 50000
+  
+  // For which month is this payment?
+  forMonth        DateTime                           // 2026-05-01 = May 2026 contribution
+  forCycle        Int                                // Cycle number (1, 2, 3...)
+  
+  // Payment method — how the money arrived
+  method          PaymentMethod
+  
+  // External references — link to payment provider
+  externalRef     String?                            // Ozow TX id, retail voucher code, etc.
+  externalStatus  String?                            // Provider's status string
+  
+  // Status — the journey of a payment
+  status          ContributionStatus  @default(PENDING)
+  
+  // Proof — for manual methods (EFT, retail)
+  proofUrl        String?                            // Cloudflare R2 URL of screenshot/receipt
+  proofVerifiedBy String?                            // Admin who approved manual proof
+  proofVerifiedAt DateTime?
+  
+  // Timestamps
+  createdAt       DateTime            @default(now())
+  confirmedAt     DateTime?                          // When payment actually cleared
+  
+  // Included in which ledger entry?
+  ledgerEntryId   String?
+  ledgerEntry     LedgerEntry?        @relation(fields: [ledgerEntryId], references: [id])
+
+  @@index([groupId, forMonth])
+  @@index([userId, groupId])
+  @@index([status])
+  @@index([externalRef])
+  @@map("contributions")
+}
+
+enum PaymentMethod {
+  OZOW            // Instant EFT via Ozow
+  PAYSHAP         // PayShap instant payment
+  SNAPSCAN        // SnapScan QR
+  RETAIL          // In-store with reference code (PnP, Shoprite)
+  WALLET          // Internal wallet transfer
+  EFT_MANUAL      // Manual bank transfer + proof upload
+  DEBIT_ORDER     // Recurring debit order
+  CASH            // Cash at meeting — admin records manually
+}
+
+enum ContributionStatus {
+  PENDING         // Payment initiated, waiting for provider
+  PROCESSING      // Provider is processing (EFT clearing)
+  CONFIRMED       // Money received and verified
+  FAILED          // Payment bounced or declined
+  REFUNDED        // Reversed (dispute resolution)
+  PROOF_PENDING   // Manual method — waiting for admin to verify proof
+}
+
+// ============================================================
+// PAYOUT — Every rand that leaves the circle
+// ============================================================
+// Payouts are the moment of truth. In a rotating stokvel,
+// this is YOUR month. The pot goes to you.
+// But nobody moves money alone. 2-of-3 keys to the box.
+model Payout {
+  id              String         @id @default(cuid())
+  
+  // Who gets the money
+  recipientId     String
+  groupId         String
+  recipient       User           @relation("PayoutRecipient", fields: [recipientId], references: [id])
+  group           Group          @relation(fields: [groupId], references: [id])
+  
+  amountCents     Int                               // Total payout in cents
+  
+  // For which month/cycle
+  forMonth        DateTime
+  forCycle        Int
+  
+  // Where to send the money
+  payoutMethod    PayoutMethod
+  bankName        String?                           // Recipient's bank
+  bankAccount     String?                           // Encrypted
+  bankBranch      String?
+  mobileWallet    String?                           // For eWallet payouts
+  
+  // Multisig approval — "2 keys to the money box"
+  requiredApprovals Int         @default(2)         // How many admin sigs needed
+  currentApprovals  Int         @default(0)         // How many received
+  
+  // Status
+  status          PayoutStatus  @default(PENDING_APPROVAL)
+  
+  // External payment reference
+  externalRef     String?
+  externalStatus  String?
+  
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  approvedAt      DateTime?                         // When quorum reached
+  executedAt      DateTime?                         // When money left
+  completedAt     DateTime?                         // When recipient confirmed
+  
+  // Relations
+  approvals       PayoutApproval[]
+  
+  // Included in which ledger entry?
+  ledgerEntryId   String?
+  ledgerEntry     LedgerEntry?  @relation(fields: [ledgerEntryId], references: [id])
+
+  @@index([groupId, forMonth])
+  @@index([recipientId])
+  @@index([status])
+  @@map("payouts")
+}
+
+enum PayoutMethod {
+  EFT             // Standard bank transfer
+  EWALLET         // FNB eWallet or similar
+  OZOW            // Ozow payout
+  CASH            // Cash at meeting
+}
+
+enum PayoutStatus {
+  PENDING_APPROVAL  // Waiting for 2-of-3 admin approval
+  APPROVED          // Quorum reached, ready to execute
+  PROCESSING        // Money is being sent
+  COMPLETED         // Recipient received funds
+  FAILED            // Transfer failed — retry needed
+  DISPUTED          // Member raised an issue
+  CANCELLED         // Cancelled before execution
+}
+
+// ============================================================
+// PAYOUT APPROVAL — Each key turned in the money box
+// ============================================================
+// Every admin who approves a payout leaves a signature.
+// Transparent. Auditable. No "I didn't approve that."
+model PayoutApproval {
+  id              String   @id @default(cuid())
+  
+  payoutId        String
+  payout          Payout   @relation(fields: [payoutId], references: [id])
+  
+  approverId      String
+  approver        User     @relation(fields: [approverId], references: [id])
+  
+  decision        ApprovalDecision
+  reason          String?                           // "Verified — Khethiwe's turn per rotation"
+  
+  // How they approved — WhatsApp reply, web dashboard, USSD
+  channel         String   @default("web")          // "whatsapp" | "web" | "ussd"
+  
+  createdAt       DateTime @default(now())
+
+  @@unique([payoutId, approverId])                  // One vote per admin per payout
+  @@map("payout_approvals")
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+  ABSTAINED
+}
+
+// ============================================================
+// LEDGER ENTRY — The book that can't burn
+// ============================================================
+// Every night at 8pm SAST, we close the book.
+// Hash every transaction. Publish the proof.
+// This is the "book on the table" — digital, immutable.
+model LedgerEntry {
+  id              String   @id @default(cuid())
+  
+  groupId         String
+  group           Group    @relation(fields: [groupId], references: [id])
+  
+  // What was hashed
+  entryDate       DateTime                          // The day this covers (2026-05-01)
+  cycle           Int                               // Which cycle
+  
+  // The hash — SHA-256 of all transactions that day
+  dataHash        String                            // SHA-256 hex
+  previousHash    String?                           // Chain: hash of previous entry
+  merkleRoot      String?                           // If part of nightly batch
+  
+  // Raw data reference — the CSV that was hashed
+  rawDataUrl      String?                           // IPFS CID or R2 URL
+  
+  // Public proof — where anyone can verify
+  bitcoinTxHash   String?                           // OP_RETURN transaction
+  ipfsCid         String?                           // IPFS content identifier
+  tweetId         String?                           // Twitter post ID
+  
+  // Summary stats (denormalized for quick display)
+  totalInCents    Int      @default(0)              // Total contributions that day
+  totalOutCents   Int      @default(0)              // Total payouts that day
+  transactionCount Int     @default(0)              // Number of transactions
+  memberCount     Int      @default(0)              // Active members at time of close
+  
+  // Status
+  status          LedgerStatus @default(PENDING)
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  publishedAt     DateTime?                         // When proof was published
+
+  // Relations
+  contributions   Contribution[]
+  payouts         Payout[]
+
+  @@unique([groupId, entryDate])                    // One entry per group per day
+  @@index([dataHash])
+  @@index([groupId, entryDate])
+  @@map("ledger_entries")
+}
+
+enum LedgerStatus {
+  PENDING         // Cron hasn't run yet
+  HASHED          // Hash computed, not yet published
+  PUBLISHED       // Hash on Bitcoin/IPFS/Twitter
+  VERIFIED        // At least one external verification
+  FAILED          // Publishing failed — retry queued
+}
+
+// ============================================================
+// DISPUTE — When trust breaks, the process heals
+// ============================================================
+// Stokvels have disputes. "I paid but it's not showing."
+// "The treasurer took the money." Traditional stokvels handle
+// this in meetings. We handle it with evidence + votes.
+model Dispute {
+  id              String        @id @default(cuid())
+  
+  groupId         String
+  group           Group         @relation(fields: [groupId], references: [id])
+  
+  raisedBy        String                            // User ID who raised it
+  againstUserId   String?                           // User ID accused (optional)
+  
+  type            DisputeType
+  description     String                            // "I paid R500 on 3 May but it shows unpaid"
+  evidenceUrls    String[]                          // Screenshots, receipts
+  
+  // Resolution
+  status          DisputeStatus @default(OPEN)
+  resolution      String?                           // "Payment found in Ozow logs, credited."
+  resolvedBy      String?                           // Admin who resolved
+  resolvedAt      DateTime?
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([groupId, status])
+  @@map("disputes")
+}
+
+enum DisputeType {
+  MISSING_PAYMENT   // "I paid but it's not reflected"
+  WRONG_AMOUNT      // "I was charged R600 not R500"
+  UNAUTHORIZED      // "Someone withdrew without approval"
+  ROTATION_ORDER    // "It should be my turn, not hers"
+  OTHER
+}
+
+enum DisputeStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  ESCALATED         // Needs NASASA or legal intervention
+}
+
+// ============================================================
+// OTP SESSION — WhatsApp is the login
+// ============================================================
+// No passwords. No email. Your phone IS your identity.
+// Send OTP via WhatsApp → verify → issue JWT cookie.
+model OtpSession {
+  id              String   @id @default(cuid())
+  
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id])
+  
+  phone           String                            // Phone OTP was sent to
+  code            String                            // 6-digit code, hashed
+  channel         String   @default("whatsapp")     // "whatsapp" | "sms" | "ussd"
+  
+  attempts        Int      @default(0)              // Max 3 before cooldown
+  isUsed          Boolean  @default(false)
+  expiresAt       DateTime                          // 5 minutes from creation
+  
+  createdAt       DateTime @default(now())
+
+  @@index([phone, code])
+  @@index([expiresAt])
+  @@map("otp_sessions")
+}
+
+// ============================================================
+// NOTIFICATION — Nudges that feel human
+// ============================================================
+// "Mama Nomsa, the book closes tonight. Your R500 keeps
+// Masakhane strong." — Not "Payment reminder #4827".
+model Notification {
+  id              String            @id @default(cuid())
+  
+  userId          String
+  user            User              @relation(fields: [userId], references: [id])
+  
+  type            NotificationType
+  title           String                            // Short: "Masakhane: Book Closing"
+  body            String                            // "Your R500 keeps the circle strong"
+  
+  // Delivery
+  channel         String            @default("whatsapp")  // "whatsapp" | "sms" | "push" | "web"
+  isRead          Boolean           @default(false)
+  isSent          Boolean           @default(false)
+  sentAt          DateTime?
+  readAt          DateTime?
+  
+  // Link to relevant entity
+  groupId         String?
+  referenceType   String?                           // "contribution" | "payout" | "dispute"
+  referenceId     String?                           // ID of the referenced entity
+  
+  createdAt       DateTime          @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  PAYMENT_REMINDER    // "Tomorrow is payday"
+  PAYMENT_RECEIVED    // "Mama Nomsa paid R500 ✅"
+  PAYMENT_LATE        // "Gentle reminder: your R500 is 3 days overdue"
+  PAYOUT_READY        // "Your turn! R6,000 is ready for approval"
+  PAYOUT_SENT         // "R6,000 sent to your FNB account"
+  APPROVAL_NEEDED     // "Treasurer: approve Khethiwe's payout"
+  BOOK_CLOSED         // "Today's book is closed. Hash: a7f3..."
+  MEMBER_JOINED       // "Welcome Thandi to Masakhane!"
+  MEMBER_LEFT         // "Sipho has left the group"
+  DISPUTE_OPENED      // "A dispute was raised in Masakhane"
+  DISPUTE_RESOLVED    // "Dispute resolved: payment credited"
+  GROUP_ANNOUNCEMENT  // Admin broadcast
+}
+
+// ============================================================
+// AUDIT LOG — Everything. Always. Forever.
+// ============================================================
+// In a traditional stokvel, the book is the record.
+// In Intuthuko, the audit log is the book behind the book.
+// Who did what, when, from where. Non-negotiable.
+model AuditLog {
+  id              String   @id @default(cuid())
+  
+  // Who
+  actorId         String
+  actor           User     @relation("AuditActor", fields: [actorId], references: [id])
+  
+  // What
+  action          String                            // "contribution.create", "payout.approve", etc.
+  entityType      String                            // "contribution", "payout", "group", etc.
+  entityId        String                            // ID of the affected entity
+  
+  // Where
+  groupId         String?
+  group           Group?   @relation(fields: [groupId], references: [id])
+  
+  // Details
+  metadata        Json?                             // Before/after snapshots, IP, user agent
+  channel         String   @default("web")          // "whatsapp" | "web" | "ussd" | "cron"
+  ipAddress       String?
+  
+  createdAt       DateTime @default(now())
+
+  @@index([groupId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// WALLET — Internal balance for instant transfers
+// ============================================================
+// Some members pre-load money. Wallet-to-group is instant.
+// No waiting for EFT. Like cash in your pocket at the meeting.
+model Wallet {
+  id              String          @id @default(cuid())
+  
+  userId          String          @unique
+  balanceCents    Int             @default(0)       // Current balance in cents
+  
+  // Limits
+  dailyLimitCents Int            @default(5000000)  // R50,000 default daily limit
+  monthlyLimitCents Int          @default(25000000) // R250,000 monthly
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  // Relations
+  transactions    WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id              String               @id @default(cuid())
+  
+  walletId        String
+  wallet          Wallet               @relation(fields: [walletId], references: [id])
+  
+  type            WalletTransactionType
+  amountCents     Int                               // Always positive. Direction from type.
+  balanceAfter    Int                               // Snapshot for reconciliation
+  
+  description     String                            // "Paid R500 to Masakhane (May 2026)"
+  referenceType   String?                           // "contribution" | "payout" | "topup"
+  referenceId     String?
+  
+  createdAt       DateTime             @default(now())
+
+  @@index([walletId, createdAt])
+  @@map("wallet_transactions")
+}
+
+enum WalletTransactionType {
+  TOPUP           // Money in from external source
+  PAYMENT         // Money out to group contribution
+  PAYOUT_RECEIVED // Money in from group payout
+  REFUND          // Reversal
+  FEE             // Platform fee deducted
+}
