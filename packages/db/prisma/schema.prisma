@@ -318,7 +318,7 @@ model Contribution {
   confirmedAt     DateTime?
 
   ledgerEntryId   String?
-  ledgerEntry     LedgerEntry?        @relation(fields: [ledgerEntryId], references: [id])
+  ledgerEntry     LedgerEntry?        @relation(fields: [ledgerEntryId], references: [id], onDelete: SetNull)
   group           Group               @relation(fields: [groupId], references: [id], onDelete: Restrict)
   user            User                @relation(fields: [userId], references: [id], onDelete: Restrict)
 
@@ -360,7 +360,7 @@ model Payout {
   externalStatus    String?
 
   ledgerEntryId     String?
-  ledgerEntry       LedgerEntry? @relation(fields: [ledgerEntryId], references: [id])
+  ledgerEntry       LedgerEntry? @relation(fields: [ledgerEntryId], references: [id], onDelete: SetNull)
   group             Group        @relation(fields: [groupId], references: [id], onDelete: Restrict)
   recipient         User         @relation("PayoutRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
   approvals         PayoutApproval[]
