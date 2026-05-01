@@ -1,47 +1,74 @@
-# Intuthuko — Stokvel Management Platform
+# Intuthuko 🇿🇦
 
-> *intuthuko* (isiZulu) — development, progress, growth
+**Modern Stokvel Management Platform**
 
-## Project Overview
+> *Intuthuko* (isiZulu: "development/progress") — Building the future of community savings in South Africa.
 
-Intuthuko is a next-generation digital stokvel management platform designed to serve South Africa's R50 billion stokvel market (800,000+ groups, 11M+ members).
+## The Opportunity
+
+- **R50 billion** managed annually by stokvels
+- **11.4 million** stokvel participants in SA
+- **< 0.1%** market penetration by existing digital solutions
+- **810,000+** active stokvel groups
+
+## What is Intuthuko?
+
+Intuthuko is a lightweight, WhatsApp-first stokvel management platform designed for South Africa's unique financial landscape. Unlike existing solutions that force users to download heavy apps, Intuthuko meets users where they already are — WhatsApp.
+
+## Why Now?
+
+The leading competitor (StokFella) has:
+- ❌ 1.2 MB JavaScript bundle (expensive on R29/GB data)
+- ❌ Chronic app crashes (every review mentions instability)
+- ❌ No updates since May 2023
+- ❌ Only ~10,000 downloads after 10 years
+- ❌ No offline support
+- ❌ No USSD fallback for feature phones
+
+## Our Approach
+
+### Phase 1: WhatsApp Bot MVP
+- Create/join stokvel groups via WhatsApp
+- Track contributions with automatic reminders
+- Payment confirmation via photo upload
+- Monthly payout scheduling
+
+### Phase 2: Lightweight PWA
+- Under 100 KB initial load (12x lighter than competition)
+- Offline-first with service worker
+- USSD fallback for feature phones
+- Payment integration (Ozow, SnapScan, retail)
+
+### Phase 3: Growth & Monetization
+- Bank partnership (no FSP license needed)
+- Freemium model (free core, R29/month premium)
+- VAS: airtime, data, vouchers
+- NASASA partnership
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| WhatsApp Bot | WhatsApp Business API |
+| Frontend | React Native / PWA |
+| Backend | Node.js / Python FastAPI |
+| Database | PostgreSQL + Redis |
+| Payments | Ozow + SnapScan + PayGate |
+| Hosting | AWS / Railway |
 
 ## Research
 
-### Stokfella.com Technical Teardown
+See `/research` folder for the complete competitive intelligence report including:
+- StokFella technical architecture teardown
+- 95+ API endpoints mapped
+- Payment flow analysis (5 methods)
+- Security assessment
+- Market opportunity analysis
 
-| Area | Finding |
-|------|--------|
-| **Backend** | ASP.NET on Microsoft IIS 10.0 (Windows Server) |
-| **Frontend** | Bootstrap 5 + jQuery 1.11.2 (1.2 MB single JS file) |
-| **Mobile** | WebView wrapper around stokfella.mobi PWA |
-| **Payments** | PayGate (Visa/Mastercard), EFT, Retail, Wallet, Debit Orders |
-| **API** | Single monolithic ASMX endpoint (95+ methods, 206 AJAX calls) |
-| **Developer** | PLURITONE (PTY) LTD, Bryanston, Sandton |
-| **Licenses** | FSP48812 + Credit Provider NCRCP12735 |
-| **Rating** | 3.0/5 (App Store) — chronic crash complaints |
-| **Downloads** | 10K+ (0.09% market penetration after 10 years) |
+## License
 
-### Research Files
-
-- [`research/stokfella_research_report.html`](research/stokfella_research_report.html) — Full HTML report (open in browser)
-- [Download PDF Report](https://codewords-uploads.s3.amazonaws.com/runtime_v2/4cf05ae958524e63b3849f560ddb41f801b98ffaf7664dbeac37ac63c1d5a606/Stokfella_Research_Report_May2026.pdf)
-
-## Strategy
-
-1. **WhatsApp-first** — Bot for contributions, reminders, balance checks
-2. **Lightweight PWA** — Under 100 KB vs StokFella's 1.2 MB
-3. **Zero fees to start** — Freemium model
-4. **Bank partnerships** — Don't hold money, let banks handle compliance
-5. **Township-first** — Low-end phones, spotty connectivity, expensive data
-
-## Tech Stack (Planned)
-
-- **Frontend:** Next.js 16 + TypeScript + Tailwind CSS (PWA)
-- **Backend:** CodeWords microservices + Redis
-- **Payments:** PayGate/Ozow (pass-through)
-- **Comms:** WhatsApp bot
-- **Hosting:** CodeWords (*.codewords.run)
+Proprietary — All rights reserved.
 
 ---
-Intuthuko Project (c) 2026
+
+*Built with purpose. For the people. 🇿🇦*
